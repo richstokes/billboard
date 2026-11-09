@@ -284,6 +284,7 @@ func (r *Runner) layout() Layout {
 }
 
 func (r *Runner) nextFile() bool {
+	lay := r.layout()
 	for tries := 0; tries < 200; tries++ {
 		if len(r.bag) == 0 {
 			r.bag = make([]int, len(r.files))
@@ -296,27 +297,56 @@ func (r *Runner) nextFile() bool {
 		}
 		f := r.files[r.bag[0]]
 		r.bag = r.bag[1:]
-		lines := load(f)
-		if len(lines) == 0 {
-			continue
-		}
 		ei := r.effectSel
 		if ei < 0 {
 			ei = r.cfg.Effects[r.rng.Intn(len(r.cfg.Effects))]
 		}
 		spec := &effects[ei]
-		lay := r.layout()
+		if spec.Build != nil {
+			if eff, doc, ok := spec.Build(f, lay, r.cfg, r.rng); ok {
+				r.start(spec, eff, doc)
+				return true
+			}
+			if r.effectSel >= 0 && tries < 150 {
+				continue // forced to this effect: keep looking for a file it works on
+			}
+			spec = r.fallbackEffect()
+			if r.effectSel >= 0 {
+				r.flash(fmt.Sprintf("%s: nothing usable found, showing %s", effects[ei].Name, spec.Name))
+			}
+		}
+		lines := load(f)
+		if len(lines) == 0 {
+			continue
+		}
 		ch, first := chunk(lines, spec.Lines(lay, r.cfg), r.rng)
 		if len(ch) == 0 {
 			continue
 		}
-		r.doc = &Doc{Path: f.Rel, Lines: ch, FirstLine: first}
-		r.spec = spec
-		r.cur = spec.New(r.doc, lay, r.cfg, r.rng)
-		r.hold, r.outro = 0, 0
+		doc := &Doc{Path: f.Rel, Lines: ch, FirstLine: first}
+		r.start(spec, spec.New(doc, lay, r.cfg, r.rng), doc)
 		return true
 	}
 	return false
+}
+
+// fallbackEffect picks a random selected effect that works on plain files.
+func (r *Runner) fallbackEffect() *EffectSpec {
+	var ok []int
+	for _, i := range r.cfg.Effects {
+		if effects[i].Build == nil {
+			ok = append(ok, i)
+		}
+	}
+	if len(ok) == 0 {
+		return &effects[0]
+	}
+	return &effects[ok[r.rng.Intn(len(ok))]]
+}
+
+func (r *Runner) start(spec *EffectSpec, eff Effect, doc *Doc) {
+	r.spec, r.cur, r.doc = spec, eff, doc
+	r.hold, r.outro = 0, 0
 }
 
 func (r *Runner) flash(m string) {
@@ -467,6 +497,15 @@ func (r *Runner) draw() {
 			path = "…" + path[len(path)-max+1:]
 		}
 		s.Text(lay.X-lay.Gutter, 1, path, th.Header, false)
+		if info := r.doc.Info; info != "" {
+			x := lay.X - lay.Gutter + len([]rune(path)) + 3
+			if room := s.W - 3 - x; room > 8 {
+				if len([]rune(info)) > room {
+					info = string([]rune(info)[:room-1]) + "…"
+				}
+				s.Text(x, 1, info, lerp(th.LineNr, th.Header, 0.6), false)
+			}
+		}
 		sep := lerp(th.BG, th.LineNr, 0.7)
 		for x := lay.X - lay.Gutter; x < s.W-2; x++ {
 			s.Set(x, 2, '─', sep, false)

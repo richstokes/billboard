@@ -29,9 +29,11 @@ func lerp(a, b RGB, t float64) RGB {
 }
 
 type Cell struct {
-	Ch   rune
-	FG   RGB
-	Bold bool
+	Ch    rune
+	FG    RGB
+	Bold  bool
+	HasBG bool
+	BG    RGB
 }
 
 // Screen is a double-buffered cell grid that only writes changed cells.
@@ -71,7 +73,27 @@ func (s *Screen) Set(x, y int, ch rune, fg RGB, bold bool) {
 	if x < 0 || y < 0 || x >= s.W || y >= s.H {
 		return
 	}
-	s.cells[y*s.W+x] = Cell{ch, fg, bold}
+	c := &s.cells[y*s.W+x]
+	c.Ch, c.FG, c.Bold = ch, fg, bold
+}
+
+// SetBG paints a cell's background, keeping whatever character is on it.
+func (s *Screen) SetBG(x, y int, bg RGB) {
+	if x < 0 || y < 0 || x >= s.W || y >= s.H {
+		return
+	}
+	c := &s.cells[y*s.W+x]
+	c.HasBG, c.BG = true, bg
+}
+
+// Fill paints a rectangle's background and blanks it.
+func (s *Screen) Fill(x0, y0, w, h int, bg RGB) {
+	for y := y0; y < y0+h; y++ {
+		for x := x0; x < x0+w; x++ {
+			s.Set(x, y, ' ', bg, false)
+			s.SetBG(x, y, bg)
+		}
+	}
 }
 
 func (s *Screen) Text(x, y int, str string, fg RGB, bold bool) {
@@ -84,21 +106,27 @@ func (s *Screen) Text(x, y int, str string, fg RGB, bold bool) {
 func (s *Screen) Flush() {
 	w := s.out
 	w.WriteString("\x1b[?2026h") // synchronized update, ignored where unsupported
-	bgSeq := "\x1b[49m"
+	w.WriteString("\x1b[0m")
 	if !s.Transparent {
-		bgSeq = fmt.Sprintf("\x1b[48;2;%d;%d;%dm", s.BG.R, s.BG.G, s.BG.B)
+		fmt.Fprintf(w, "\x1b[48;2;%d;%d;%dm", s.BG.R, s.BG.G, s.BG.B)
 	}
-	w.WriteString("\x1b[0m" + bgSeq)
 	if s.full {
 		w.WriteString("\x1b[2J")
 	}
-	var lastFG RGB
-	lastBold, haveFG := false, false
+	var lastFG, lastBG RGB
+	lastBold, lastHasBG, started := false, false, false
 	cx, cy := -1, -1
 	for y := 0; y < s.H; y++ {
 		for x := 0; x < s.W; x++ {
 			i := y*s.W + x
 			c := s.cells[i]
+			// compare what actually hits the terminal, so dimming and theme changes repaint
+			c.FG = lerp(s.BG, c.FG, s.Brightness)
+			if c.HasBG {
+				c.BG = lerp(s.BG, c.BG, s.Brightness)
+			} else if !s.Transparent {
+				c.HasBG, c.BG = true, s.BG
+			}
 			if !s.full && c == s.prev[i] {
 				continue
 			}
@@ -106,19 +134,24 @@ func (s *Screen) Flush() {
 			if cx != x || cy != y {
 				fmt.Fprintf(w, "\x1b[%d;%dH", y+1, x+1)
 			}
-			if c.Bold != lastBold || !haveFG {
+			if c.Bold != lastBold || !started {
 				if c.Bold {
 					w.WriteString("\x1b[1m")
 				} else {
 					w.WriteString("\x1b[22m")
 				}
-				lastBold = c.Bold
 			}
-			fg := lerp(s.BG, c.FG, s.Brightness)
-			if fg != lastFG || !haveFG {
-				fmt.Fprintf(w, "\x1b[38;2;%d;%d;%dm", fg.R, fg.G, fg.B)
-				lastFG, haveFG = fg, true
+			if c.HasBG != lastHasBG || c.BG != lastBG || !started {
+				if c.HasBG {
+					fmt.Fprintf(w, "\x1b[48;2;%d;%d;%dm", c.BG.R, c.BG.G, c.BG.B)
+				} else {
+					w.WriteString("\x1b[49m")
+				}
 			}
+			if c.FG != lastFG || !started {
+				fmt.Fprintf(w, "\x1b[38;2;%d;%d;%dm", c.FG.R, c.FG.G, c.FG.B)
+			}
+			lastBold, lastHasBG, lastBG, lastFG, started = c.Bold, c.HasBG, c.BG, c.FG, true
 			w.WriteRune(c.Ch)
 			cx, cy = x+1, y
 		}

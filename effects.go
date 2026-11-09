@@ -24,6 +24,9 @@ type EffectSpec struct {
 	NoOutro bool                          // effect clears itself, skip hold + fade out
 	Lines   func(l Layout, c *Config) int // how many lines of a file to show
 	New     func(d *Doc, l Layout, c *Config, rng *rand.Rand) Effect
+	// Build replaces Lines/New for effects that make their own content (diff).
+	// Returning false means this file can't be used, so another effect is picked.
+	Build func(f SourceFile, l Layout, c *Config, rng *rand.Rand) (Effect, *Doc, bool)
 }
 
 var effects = []EffectSpec{
@@ -42,6 +45,17 @@ var effects = []EffectSpec{
 	{Name: "fade", Desc: "lines gently fade and drift in (the subtle one)",
 		Lines: func(l Layout, c *Config) int { return l.H },
 		New:   newFade},
+	{Name: "hack", Desc: "code flies in from everywhere, then a fake hacking overlay",
+		Lines: func(l Layout, c *Config) int { return l.H },
+		New:   newHack},
+	{Name: "starfield", Desc: "file characters at warp speed, real lines land one by one",
+		Lines: func(l Layout, c *Config) int { return l.H },
+		New:   newStarfield},
+	{Name: "boot", Desc: "CRT warm-up and a boot sequence (themed for c64, dreamcast, matrix)",
+		Lines: func(l Layout, c *Config) int { return l.H },
+		New:   newBoot},
+	{Name: "diff", Desc: "replays a real git commit: removed lines collapse, new ones type in",
+		Build: buildDiff},
 }
 
 func effectByName(n string) int {

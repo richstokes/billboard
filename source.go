@@ -25,7 +25,8 @@ type Line []Glyph
 type Doc struct {
 	Path      string // display path
 	Lines     []Line
-	FirstLine int // 1-based line number of Lines[0]
+	FirstLine int    // 1-based line number of Lines[0]
+	Info      string // extra header text, e.g. the commit for diff
 }
 
 var skipDirs = map[string]bool{
@@ -162,7 +163,13 @@ func load(f SourceFile) []Line {
 	if hasSecret(src) {
 		return nil
 	}
-	lexer := lexers.Match(f.Abs)
+	return highlight(f.Abs, src)
+}
+
+// highlight tokenises src, picking the lexer from the file name.
+func highlight(name, src string) []Line {
+	src = strings.ReplaceAll(src, "\r\n", "\n")
+	lexer := lexers.Match(name)
 	if lexer == nil {
 		lexer = lexers.Analyse(src)
 	}

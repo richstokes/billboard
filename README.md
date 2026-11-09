@@ -41,8 +41,12 @@ It's pattern matching, so it won't catch everything. Worth running it over a pro
 | `matrix` | Digital rain (katakana + characters from the file) that reveals the code where it falls |
 | `decrypt` | Scrambled glyphs that resolve into code, line by line |
 | `fade` | Lines gently fade and drift in. The subtle one |
+| `hack` | Code flies in from all over the screen, then a fake "BYPASSING FIREWALL" progress box and a flashing "ACCESS GRANTED" |
+| `starfield` | Characters from the file fly past at warp speed while real lines land one at a time |
+| `boot` | CRT warm-up and a fake boot sequence before the file is listed. Themed for `c64` (BASIC screen + border), `dreamcast` (spinning swirl) and `matrix` ("Wake up, Neo...") |
+| `diff` | Replays a real git commit that touched the file: removed lines go red and collapse, new lines type in green. The header shows the commit. Files with no history fall back to another effect |
 
-Default is `--effect all`, which picks one at random per file.
+Default is `--effect all`, which picks one at random per file. Diff replay also runs the secret checks on old versions of the file, since a key that was deleted later still lives in history.
 
 ### Themes
 
