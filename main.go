@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -29,6 +30,7 @@ type Config struct {
 	Transparent bool
 	Ordered     bool
 	FPS         int
+	Watch       bool
 }
 
 const usage = `billboard - stream your source code as a live background
@@ -71,6 +73,7 @@ func main() {
 	fs.BoolVar(&cfg.Transparent, "transparent", false, "don't paint a background (use the terminal's own)")
 	fs.BoolVar(&cfg.Ordered, "ordered", false, "go through files in order instead of shuffling")
 	fs.IntVar(&cfg.FPS, "fps", 30, "frames per second")
+	fs.BoolVar(&cfg.Watch, "watch", false, "start blank and only show files as they're added or modified")
 	exclude := fs.String("exclude", "", "extra comma-separated directory names to skip")
 	seed := fs.Int64("seed", 0, "random seed (0 = random)")
 	fs.Usage = func() {
@@ -128,7 +131,10 @@ func main() {
 	}
 
 	files := scan(dirs, splitList(*exclude))
-	if len(files) == 0 {
+	if len(files) == 0 && !(cfg.Watch && *ext != "") {
+		if cfg.Watch {
+			die("no files under %s yet, so nothing to pick from; pass --ext too", strings.Join(dirs, " "))
+		}
 		die("no files found under %s", strings.Join(dirs, " "))
 	}
 
@@ -164,7 +170,11 @@ func main() {
 		for _, e := range cfg.Exts {
 			short = append(short, strings.TrimPrefix(e, "."))
 		}
-		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard --ext %s %s\n", strings.Join(short, ","), quoteArgs(dirs))
+		watchFlag := ""
+		if cfg.Watch {
+			watchFlag = "--watch "
+		}
+		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard %s--ext %s %s\n", watchFlag, strings.Join(short, ","), quoteArgs(dirs))
 	}
 
 	want := map[string]bool{}
@@ -177,7 +187,7 @@ func main() {
 			chosen = append(chosen, f)
 		}
 	}
-	if len(chosen) == 0 {
+	if len(chosen) == 0 && !cfg.Watch {
 		restore()
 		die("no files matching %s", strings.Join(cfg.Exts, ", "))
 	}
@@ -185,7 +195,11 @@ func main() {
 	if *seed == 0 {
 		*seed = time.Now().UnixNano()
 	}
-	r := &Runner{cfg: cfg, files: chosen, rng: rand.New(rand.NewSource(*seed))}
+	r := &Runner{cfg: cfg, files: chosen, dirs: dirs, rng: rand.New(rand.NewSource(*seed))}
+	if cfg.Watch {
+		r.watch = newWatcher(dirs, splitList(*exclude), want, chosen)
+		go r.watch.run(time.Second)
+	}
 	if msg := r.Run(); msg != "" {
 		restore()
 		die("%s", msg)
@@ -254,8 +268,13 @@ func reorderArgs(fs *flag.FlagSet, args []string) []string {
 type Runner struct {
 	cfg   *Config
 	files []SourceFile
-	rng   *rand.Rand
-	s     *Screen
+	dirs  []string
+	watch *watcher // nil unless --watch
+
+	curFile SourceFile
+	curInfo string
+	rng     *rand.Rand
+	s       *Screen
 
 	bag       []int
 	effectSel int // -1 = random from cfg.Effects, else forced index
@@ -283,51 +302,85 @@ func (r *Runner) layout() Layout {
 	return Layout{X: x, Y: top, W: max(10, r.s.W-x-2), H: max(3, r.s.H-top-1), Gutter: gutter}
 }
 
+// takeFile returns the next file to show: from the change queue with --watch,
+// otherwise from a shuffle bag so every file plays once before any repeats.
+func (r *Runner) takeFile() (SourceFile, string, bool) {
+	if r.watch != nil {
+		it, ok := r.watch.pop()
+		if !ok {
+			return SourceFile{}, "", false
+		}
+		if it.isNew {
+			return it.f, "new file", true
+		}
+		return it.f, "modified", true
+	}
+	if len(r.bag) == 0 {
+		r.bag = make([]int, len(r.files))
+		for i := range r.bag {
+			r.bag[i] = i
+		}
+		if !r.cfg.Ordered {
+			r.rng.Shuffle(len(r.bag), func(i, j int) { r.bag[i], r.bag[j] = r.bag[j], r.bag[i] })
+		}
+	}
+	f := r.files[r.bag[0]]
+	r.bag = r.bag[1:]
+	return f, "", true
+}
+
 func (r *Runner) nextFile() bool {
-	lay := r.layout()
 	for tries := 0; tries < 200; tries++ {
-		if len(r.bag) == 0 {
-			r.bag = make([]int, len(r.files))
-			for i := range r.bag {
-				r.bag[i] = i
-			}
-			if !r.cfg.Ordered {
-				r.rng.Shuffle(len(r.bag), func(i, j int) { r.bag[i], r.bag[j] = r.bag[j], r.bag[i] })
-			}
+		f, info, ok := r.takeFile()
+		if !ok {
+			return false
 		}
-		f := r.files[r.bag[0]]
-		r.bag = r.bag[1:]
-		ei := r.effectSel
-		if ei < 0 {
-			ei = r.cfg.Effects[r.rng.Intn(len(r.cfg.Effects))]
+		if r.play(f, info, tries) {
+			return true
 		}
-		spec := &effects[ei]
-		if spec.Build != nil {
-			if eff, doc, ok := spec.Build(f, lay, r.cfg, r.rng); ok {
-				r.start(spec, eff, doc)
-				return true
-			}
-			if r.effectSel >= 0 && tries < 150 {
-				continue // forced to this effect: keep looking for a file it works on
-			}
-			spec = r.fallbackEffect()
-			if r.effectSel >= 0 {
-				r.flash(fmt.Sprintf("%s: nothing usable found, showing %s", effects[ei].Name, spec.Name))
-			}
-		}
-		lines := load(f)
-		if len(lines) == 0 {
-			continue
-		}
-		ch, first := chunk(lines, spec.Lines(lay, r.cfg), r.rng)
-		if len(ch) == 0 {
-			continue
-		}
-		doc := &Doc{Path: f.Rel, Lines: ch, FirstLine: first}
-		r.start(spec, spec.New(doc, lay, r.cfg, r.rng), doc)
-		return true
 	}
 	return false
+}
+
+// replay restarts the current file, e.g. after changing effect or layout.
+func (r *Runner) replay() {
+	if r.cur == nil || !r.play(r.curFile, r.curInfo, 1<<30) {
+		r.nextFile()
+	}
+}
+
+// play starts f with the selected effect. False means f can't be shown.
+func (r *Runner) play(f SourceFile, info string, tries int) bool {
+	lay := r.layout()
+	ei := r.effectSel
+	if ei < 0 {
+		ei = r.cfg.Effects[r.rng.Intn(len(r.cfg.Effects))]
+	}
+	spec := &effects[ei]
+	if spec.Build != nil {
+		if eff, doc, ok := spec.Build(f, lay, r.cfg, r.rng); ok {
+			r.start(f, info, spec, eff, doc)
+			return true
+		}
+		if r.effectSel >= 0 && r.watch == nil && tries < 150 {
+			return false // forced to this effect: keep looking for a file it works on
+		}
+		spec = r.fallbackEffect()
+		if r.effectSel >= 0 && r.watch == nil {
+			r.flash(fmt.Sprintf("%s: nothing usable found, showing %s", effects[ei].Name, spec.Name))
+		}
+	}
+	lines := load(f)
+	if len(lines) == 0 {
+		return false
+	}
+	ch, first := chunk(lines, spec.Lines(lay, r.cfg), r.rng)
+	if len(ch) == 0 {
+		return false
+	}
+	doc := &Doc{Path: f.Rel, Lines: ch, FirstLine: first}
+	r.start(f, info, spec, spec.New(doc, lay, r.cfg, r.rng), doc)
+	return true
 }
 
 // fallbackEffect picks a random selected effect that works on plain files.
@@ -344,7 +397,11 @@ func (r *Runner) fallbackEffect() *EffectSpec {
 	return &effects[ok[r.rng.Intn(len(ok))]]
 }
 
-func (r *Runner) start(spec *EffectSpec, eff Effect, doc *Doc) {
+func (r *Runner) start(f SourceFile, info string, spec *EffectSpec, eff Effect, doc *Doc) {
+	if doc.Info == "" {
+		doc.Info = info
+	}
+	r.curFile, r.curInfo = f, info
 	r.spec, r.cur, r.doc = spec, eff, doc
 	r.hold, r.outro = 0, 0
 }
@@ -380,7 +437,7 @@ func (r *Runner) Run() string {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGHUP)
 
-	if !r.nextFile() {
+	if r.watch == nil && !r.nextFile() {
 		return "couldn't read any of the matching files"
 	}
 	tick := time.NewTicker(time.Second / time.Duration(r.cfg.FPS))
@@ -396,14 +453,17 @@ func (r *Runner) Run() string {
 		case <-winch:
 			w, h, _ := term.GetSize(int(os.Stdout.Fd()))
 			r.s.Resize(w, h)
-			r.nextFile()
+			r.replay()
 			continue
 		case <-quit:
 			return ""
 		case now := <-tick.C:
 			dt := now.Sub(last).Seconds()
 			last = now
-			if !r.paused {
+			if r.cur == nil && r.watch != nil {
+				r.nextFile() // idle: pick up the first change as soon as it lands
+			}
+			if !r.paused && r.cur != nil {
 				r.advance(dt)
 			}
 			r.draw()
@@ -416,7 +476,7 @@ func (r *Runner) advance(dt float64) {
 	if !r.cur.Done() {
 		return
 	}
-	if r.spec.NoOutro {
+	if r.spec.NoOutro && r.watch == nil {
 		r.nextFile()
 		return
 	}
@@ -424,9 +484,12 @@ func (r *Runner) advance(dt float64) {
 		r.hold += dt
 		return
 	}
+	if r.watch != nil && r.watch.pending() == 0 {
+		return // --watch: stay on this file until something else changes
+	}
 	r.outro += dt
-	if r.outro >= 0.7 {
-		r.nextFile()
+	if r.outro >= 0.7 && !r.nextFile() {
+		r.outro = 0
 	}
 }
 
@@ -436,7 +499,11 @@ func (r *Runner) handleKey(k []byte) (quit bool) {
 	case s == "q" || s == "Q" || s == "\x03" || s == "\x1b":
 		return true
 	case s == "n" || s == "\x1b[C":
-		r.nextFile()
+		if r.watch != nil && r.watch.pending() == 0 {
+			r.flash("no changes queued")
+		} else {
+			r.nextFile()
+		}
 	case s == " ":
 		r.paused = !r.paused
 		r.flash(map[bool]string{true: "paused", false: "resumed"}[r.paused])
@@ -450,7 +517,7 @@ func (r *Runner) handleKey(k []byte) (quit bool) {
 		} else {
 			r.flash("effect: " + effects[r.effectSel].Name)
 		}
-		r.nextFile()
+		r.replay()
 	case s == "t":
 		cfg.Theme = (cfg.Theme + 1) % len(themes)
 		r.flash("theme: " + themes[cfg.Theme].Name)
@@ -471,10 +538,10 @@ func (r *Runner) handleKey(k []byte) (quit bool) {
 		r.flash(fmt.Sprintf("brightness: %.0f%%", cfg.Brightness*100))
 	case s == "l":
 		cfg.LineNumbers = !cfg.LineNumbers
-		r.nextFile()
+		r.replay()
 	case s == "h":
 		cfg.Header = !cfg.Header
-		r.nextFile()
+		r.replay()
 	case s == "?":
 		r.help = !r.help
 	}
@@ -490,8 +557,48 @@ func (r *Runner) draw() {
 		s.Brightness *= 1 - clamp01(r.outro/0.7)
 	}
 	s.Clear()
+	if r.cur == nil {
+		r.drawIdle(th)
+	} else {
+		r.drawFile(th)
+	}
+	if r.help {
+		r.drawHelp(th)
+	}
+	if time.Now().Before(r.msgUntil) {
+		m := " " + r.msg + " "
+		s.Text(s.W-len([]rune(m))-2, s.H-1, m, th.Header, true)
+	}
+	s.Flush()
+}
+
+// drawIdle is the --watch screen before anything has changed.
+func (r *Runner) drawIdle(th *Theme) {
+	s := r.s
+	t := float64(time.Now().UnixMilli()%100000) / 1000
+	msg := "watching " + strings.Join(r.dirs, ", ")
+	if len([]rune(msg)) > s.W-4 {
+		msg = "watching for changes"
+	}
+	dots := strings.Repeat(".", int(t*2)%4)
+	sub := "waiting for a file to be saved" + dots + strings.Repeat(" ", 3-len(dots))
+	y := s.H/2 - 1
+	pulse := 0.55 + 0.25*math.Sin(t*2)
+	s.Text((s.W-len([]rune(msg)))/2, y, msg, lerp(th.BG, th.Header, pulse), false)
+	s.Text((s.W-len([]rune(sub)))/2, y+2, sub, lerp(th.BG, th.LineNr, 0.9), false)
+}
+
+func (r *Runner) drawFile(th *Theme) {
+	s := r.s
 	if r.cfg.Header {
 		lay := r.layout()
+		queued := ""
+		if r.watch != nil {
+			if n := r.watch.pending(); n > 0 {
+				queued = fmt.Sprintf("+%d queued", n)
+				s.Text(s.W-3-len(queued), 1, queued, th.Header, false)
+			}
+		}
 		path := r.doc.Path
 		if max := s.W - 6; len(path) > max && max > 3 {
 			path = "…" + path[len(path)-max+1:]
@@ -499,7 +606,7 @@ func (r *Runner) draw() {
 		s.Text(lay.X-lay.Gutter, 1, path, th.Header, false)
 		if info := r.doc.Info; info != "" {
 			x := lay.X - lay.Gutter + len([]rune(path)) + 3
-			if room := s.W - 3 - x; room > 8 {
+			if room := s.W - 3 - x - len(queued) - 2; room > 8 {
 				if len([]rune(info)) > room {
 					info = string([]rune(info)[:room-1]) + "…"
 				}
@@ -512,14 +619,6 @@ func (r *Runner) draw() {
 		}
 	}
 	r.cur.Draw(s, th)
-	if r.help {
-		r.drawHelp(th)
-	}
-	if time.Now().Before(r.msgUntil) {
-		m := " " + r.msg + " "
-		s.Text(s.W-len([]rune(m))-2, s.H-1, m, th.Header, true)
-	}
-	s.Flush()
 }
 
 func (r *Runner) drawHelp(th *Theme) {

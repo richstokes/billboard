@@ -32,6 +32,14 @@ It's pattern matching, so it won't catch everything. Worth running it over a pro
 
 `billboard -h` lists every flag, effect and theme.
 
+### Watch mode
+
+```sh
+billboard --watch --ext go,ts ~/code/myproject
+```
+
+Starts on a blank "waiting" screen and only shows files as they're added or saved, so the background follows what you're actually working on. If several files change at once they queue up and play in the order they changed (the header shows how many are waiting). Once the queue is empty it stays on the last file until something else changes. It rescans once a second, so there's up to a second of lag after a save.
+
 ### Effects
 
 | Effect | What it does |

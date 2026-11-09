@@ -66,6 +66,8 @@ func extOf(path string) string {
 
 type SourceFile struct {
 	Abs, Rel, Ext string
+	ModTime       int64 // unix nanos, used by --watch
+	Size          int64
 }
 
 func scan(roots []string, extraSkip []string) []SourceFile {
@@ -95,7 +97,8 @@ func scan(roots []string, extraSkip []string) []SourceFile {
 				return nil
 			}
 			rel, _ := filepath.Rel(root, p)
-			out = append(out, SourceFile{Abs: p, Rel: filepath.Join(label, rel), Ext: extOf(name)})
+			out = append(out, SourceFile{Abs: p, Rel: filepath.Join(label, rel), Ext: extOf(name),
+				ModTime: info.ModTime().UnixNano(), Size: info.Size()})
 			return nil
 		})
 	}

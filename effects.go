@@ -231,14 +231,19 @@ type scroller struct {
 	l   Layout
 	pos float64
 	lps float64
+	end float64
 }
 
 func newScroll(d *Doc, l Layout, c *Config, rng *rand.Rand) Effect {
-	return &scroller{d: d, l: l, pos: -float64(l.H - 1), lps: c.LPS}
+	e := &scroller{d: d, l: l, pos: -float64(l.H - 1), lps: c.LPS, end: float64(len(d.Lines))}
+	if c.Watch { // stop with the end of the file on screen, since we may sit here a while
+		e.end = math.Max(0, float64(len(d.Lines)-l.H))
+	}
+	return e
 }
 
-func (e *scroller) Update(dt float64) { e.pos += dt * e.lps }
-func (e *scroller) Done() bool        { return e.pos >= float64(len(e.d.Lines)) }
+func (e *scroller) Update(dt float64) { e.pos = math.Min(e.pos+dt*e.lps, e.end) }
+func (e *scroller) Done() bool        { return e.pos >= e.end }
 
 func (e *scroller) Draw(s *Screen, th *Theme) {
 	top := int(math.Floor(e.pos))
