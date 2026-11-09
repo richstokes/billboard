@@ -37,7 +37,7 @@ Default is `--effect all`, which picks one at random per file.
 
 ### Themes
 
-`dracula`, `tokyonight`, `monokai`, `nord`, `gruvbox`, `synthwave`, `github-dark`, plus single-hue CRT themes `matrix`, `amber`, `ice`, `mono`.
+`dracula`, `tokyonight`, `monokai`, `nord`, `gruvbox`, `synthwave`, `github-dark`, `c64`, plus single-hue CRT themes `matrix`, `amber`, `ice`, `mono`.
 
 ### Keys
 

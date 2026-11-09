@@ -61,6 +61,9 @@ var themes = []*Theme{
 		[9]string{"#fede5d", "#36f9f6", "#ff7edb", "#ff8b39", "#f97e72", "#7a5c9a", "#fede5d", "#c9b8e0", "#36f9f6"}),
 	mk("github-dark", "#0d1117", "#e6edf3", "#30363d", "#7d8590", "#e6edf3", "#3fb950", "#d2ffd9",
 		[9]string{"#ff7b72", "#ffa657", "#d2a8ff", "#a5d6ff", "#79c0ff", "#8b949e", "#ff7b72", "#c9d1d9", "#79c0ff"}),
+	// Commodore 64, using colors from the Pepto palette: light blue on blue, white cursor-ish highlights
+	mk("c64", "#352879", "#6c5eb5", "#5246a0", "#6c5eb5", "#6c5eb5", "#6c5eb5", "#ffffff",
+		[9]string{"#ffffff", "#70a4b2", "#9ad284", "#b8c76f", "#9a6759", "#959595", "#6c5eb5", "#6c5eb5", "#70a4b2"}),
 	mono("matrix", "#000500", "#0a3d12", "#118a2c", "#3cff6e", "#c8ffd6"),
 	mono("amber", "#0c0700", "#4a2c00", "#9c6100", "#ffb000", "#ffe0a0"),
 	mono("ice", "#00080c", "#0b3a4a", "#1f7f99", "#5fd7ff", "#d8f6ff"),
