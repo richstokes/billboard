@@ -43,7 +43,7 @@ var skipFiles = map[string]bool{
 // Extensions picked by default in the picker: things that read as "code".
 var notCode = map[string]bool{
 	".json": true, ".md": true, ".txt": true, ".csv": true, ".svg": true, ".xml": true,
-	".lock": true, ".sum": true, ".mod": true, ".sh": true, ".cmd": true, ".map": true, ".log": true, ".tsv": true, ".snap": true,
+	".lock": true, ".sum": true, ".mod": true, ".sh": true, ".cmd": true, ".bat": true, ".ps1": true, ".map": true, ".log": true, ".tsv": true, ".snap": true,
 	".min.js": true, ".pem": true, ".env": true, ".ini": true, ".cfg": true,
 }
 
