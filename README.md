@@ -19,7 +19,16 @@ billboard . --effect matrix --theme matrix
 billboard . --effect fade,scroll --brightness 0.5 --speed 0.7
 ```
 
-It walks the dirs recursively and skips the usual junk (dotdirs, `node_modules`, `vendor`, `dist`, lockfiles, binaries, anything over 512KB). Add more with `--exclude`. After using the picker it prints the equivalent `--ext` command on exit, so you can drop that into a script.
+It walks the dirs recursively and skips the usual junk (dotdirs, `node_modules`, `vendor`, `dist`, lockfiles, binaries, anything over 512KB). Add more with `--exclude`.
+
+Since this is meant for streams, anything that might hold a secret is never shown, even if you pass it with `--ext`:
+
+- Dotfiles and dot-dirs (`.env`, `.ssh`, `.aws`, ...), plus dirs named `secrets`, `credentials`, `certs` or `keys`
+- Env files, keys and certs, keystores, Terraform state and tfvars, `id_rsa` and friends, `.netrc`/`.npmrc`/`.pypirc` (see `secrets.go`)
+- Config files with names like `secrets.yaml` or `service-account.json`
+- Any file whose contents look like they include a secret: private keys, AWS/GitHub/GitLab/Slack/Stripe/Google/OpenAI/Anthropic tokens, passwords in connection URLs, or `password = "..."` style assignments
+
+It's pattern matching, so it won't catch everything. Worth running it over a project once before going live. After using the picker it prints the equivalent `--ext` command on exit, so you can drop that into a script.
 
 `billboard -h` lists every flag, effect and theme.
 

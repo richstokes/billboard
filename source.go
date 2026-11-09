@@ -44,7 +44,7 @@ var skipFiles = map[string]bool{
 var notCode = map[string]bool{
 	".json": true, ".md": true, ".txt": true, ".csv": true, ".svg": true, ".xml": true,
 	".lock": true, ".sum": true, ".mod": true, ".sh": true, ".cmd": true, ".bat": true, ".ps1": true, ".map": true, ".log": true, ".tsv": true, ".snap": true,
-	".min.js": true, ".pem": true, ".env": true, ".ini": true, ".cfg": true,
+	".min.js": true, ".ini": true, ".cfg": true,
 }
 
 const maxFileSize = 512 * 1024
@@ -68,7 +68,7 @@ type SourceFile struct {
 }
 
 func scan(roots []string, extraSkip []string) []SourceFile {
-	for _, s := range extraSkip {
+	for _, s := range append(extraSkip, secretDirs...) {
 		skipDirs[s] = true
 	}
 	var out []SourceFile
@@ -86,7 +86,7 @@ func scan(roots []string, extraSkip []string) []SourceFile {
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() || strings.HasPrefix(name, ".") || skipFiles[name] {
+			if !d.Type().IsRegular() || strings.HasPrefix(name, ".") || skipFiles[name] || isSecretFile(name) {
 				return nil
 			}
 			info, err := d.Info()
@@ -159,6 +159,9 @@ func load(f SourceFile) []Line {
 		return nil
 	}
 	src := strings.ReplaceAll(string(data), "\r\n", "\n")
+	if hasSecret(src) {
+		return nil
+	}
 	lexer := lexers.Match(f.Abs)
 	if lexer == nil {
 		lexer = lexers.Analyse(src)
