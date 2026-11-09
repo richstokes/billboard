@@ -1,0 +1,62 @@
+# billboard
+
+Streams source code from your projects in a terminal, with a few different effects and themes. Built to sit in the background of an OBS scene or video.
+
+## Install
+
+```sh
+go install github.com/richstokes/billboard@latest
+```
+
+Or clone and `go build -o billboard .`
+
+## Use
+
+```sh
+billboard ~/code/myproject                 # pick file types interactively
+billboard ~/code/a ~/code/b --ext go,ts    # skip the picker
+billboard . --effect matrix --theme matrix
+billboard . --effect fade,scroll --brightness 0.5 --speed 0.7
+```
+
+It walks the dirs recursively and skips the usual junk (dotdirs, `node_modules`, `vendor`, `dist`, lockfiles, binaries, anything over 512KB). Add more with `--exclude`. After using the picker it prints the equivalent `--ext` command on exit, so you can drop that into a script.
+
+`billboard -h` lists every flag, effect and theme.
+
+### Effects
+
+| Effect | What it does |
+| --- | --- |
+| `typewriter` | Types the code live with a blinking cursor, natural pauses and the odd typo + backspace |
+| `scroll` | Continuous credit-roll scroll, flows from one file straight into the next |
+| `matrix` | Digital rain (katakana + characters from the file) that reveals the code where it falls |
+| `decrypt` | Scrambled glyphs that resolve into code, line by line |
+| `fade` | Lines gently fade and drift in. The subtle one |
+
+Default is `--effect all`, which picks one at random per file.
+
+### Themes
+
+`dracula`, `tokyonight`, `monokai`, `nord`, `gruvbox`, `synthwave`, `github-dark`, plus single-hue CRT themes `matrix`, `amber`, `ice`, `mono`.
+
+### Keys
+
+| Key | |
+| --- | --- |
+| `n` / `→` | next file |
+| `space` | pause |
+| `e` | cycle effect (mix → each one) |
+| `t` / `T` | cycle theme |
+| `+` / `-` | speed |
+| `b` / `B` | dimmer / brighter |
+| `l` / `h` | toggle line numbers / header |
+| `?` | key help |
+| `q` | quit |
+
+## OBS tips
+
+- Use a Window Capture (macOS Screen Capture → Window) on the terminal, and hide the terminal's own chrome/scrollbar if you can
+- `--brightness 0.4`-`0.6` keeps it from fighting with whatever's in front of it. You can also just tweak it live with `b`/`B`
+- `--transparent` skips painting a background so the terminal's own background/opacity shows through
+- Bigger font + fewer columns reads better on stream than a wall of tiny text
+- `--header=false --line-numbers=false` for a cleaner look
