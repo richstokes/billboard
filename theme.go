@@ -64,6 +64,9 @@ var themes = []*Theme{
 	// Commodore 64, using colors from the Pepto palette: light blue on blue, white cursor-ish highlights
 	mk("c64", "#352879", "#6c5eb5", "#5246a0", "#6c5eb5", "#6c5eb5", "#6c5eb5", "#ffffff",
 		[9]string{"#ffffff", "#70a4b2", "#9ad284", "#b8c76f", "#9a6759", "#959595", "#6c5eb5", "#6c5eb5", "#70a4b2"}),
+	// Late-90s Sega: swirl orange and blue on a deep navy, accents from the colored Saturn buttons
+	mk("dreamcast", "#0a0f26", "#e6ebf5", "#262f5c", "#4a7fe0", "#ff6a13", "#2f8cff", "#e6f3ff",
+		[9]string{"#ff6a13", "#3d9bff", "#7fd4ff", "#ffd23f", "#ff4d6d", "#4c5a8f", "#ff8f4d", "#9aa6c8", "#5fe08a"}),
 	mono("matrix", "#000500", "#0a3d12", "#118a2c", "#3cff6e", "#c8ffd6"),
 	mono("amber", "#0c0700", "#4a2c00", "#9c6100", "#ffb000", "#ffe0a0"),
 	mono("ice", "#00080c", "#0b3a4a", "#1f7f99", "#5fd7ff", "#d8f6ff"),
