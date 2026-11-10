@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"math/rand"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,7 +24,21 @@ type CommitDiff struct {
 	Hunks               [][]DiffRow
 }
 
-var repoRoots = map[string]string{} // dir -> repo root, "" if not in a repo
+// Both caches are hit from the --watch goroutine as well as the main loop.
+var (
+	gitMu     sync.Mutex
+	repoRoots = map[string]string{} // dir -> repo root, "" if not in a repo
+	wtCache   = map[string]wtEntry{}
+)
+
+type wtEntry struct {
+	at  time.Time
+	wts []Worktree
+}
+
+type Worktree struct {
+	Path, Label string
+}
 
 func git(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -32,7 +49,10 @@ func git(dir string, args ...string) (string, error) {
 }
 
 func repoRoot(dir string) string {
-	if r, ok := repoRoots[dir]; ok {
+	gitMu.Lock()
+	r, ok := repoRoots[dir]
+	gitMu.Unlock()
+	if ok {
 		return r
 	}
 	out, err := git(dir, "rev-parse", "--show-toplevel")
@@ -40,8 +60,86 @@ func repoRoot(dir string) string {
 	if err == nil {
 		root = strings.TrimSpace(out)
 	}
+	gitMu.Lock()
 	repoRoots[dir] = root
+	gitMu.Unlock()
 	return root
+}
+
+// linkedWorktrees returns every linked worktree of the given repos (not the main
+// checkouts, which are already covered), deduped and in a stable order. Results
+// are cached for a bit since --watch rescans every second.
+func linkedWorktrees(repos map[string]bool) []Worktree {
+	var dirs []string
+	for r := range repos {
+		dirs = append(dirs, r)
+	}
+	sort.Strings(dirs)
+	seen := map[string]bool{}
+	var out []Worktree
+	for _, r := range dirs {
+		for _, wt := range worktreesOf(r) {
+			if !seen[wt.Path] {
+				seen[wt.Path] = true
+				out = append(out, wt)
+			}
+		}
+	}
+	return out
+}
+
+func worktreesOf(repo string) []Worktree {
+	gitMu.Lock()
+	c, ok := wtCache[repo]
+	gitMu.Unlock()
+	if ok && time.Since(c.at) < 15*time.Second {
+		return c.wts
+	}
+	out, err := git(repo, "worktree", "list", "--porcelain")
+	var wts []Worktree
+	if err == nil {
+		wts = parseWorktrees(out)
+	}
+	gitMu.Lock()
+	wtCache[repo] = wtEntry{time.Now(), wts}
+	gitMu.Unlock()
+	return wts
+}
+
+// parseWorktrees reads `git worktree list --porcelain`. The first entry is the
+// main checkout and is skipped. Labels look like "repo@branch".
+func parseWorktrees(porcelain string) []Worktree {
+	var out []Worktree
+	main := ""
+	for i, block := range strings.Split(strings.TrimSpace(porcelain), "\n\n") {
+		path, branch, bare := "", "", false
+		for _, ln := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(ln, "worktree "):
+				path = strings.TrimPrefix(ln, "worktree ")
+			case strings.HasPrefix(ln, "branch "):
+				branch = strings.TrimPrefix(strings.TrimPrefix(ln, "branch "), "refs/heads/")
+			case ln == "bare":
+				bare = true
+			}
+		}
+		if i == 0 {
+			main = path
+			continue
+		}
+		if path == "" || bare {
+			continue
+		}
+		if st, err := os.Stat(path); err != nil || !st.IsDir() { // prunable: dir is gone
+			continue
+		}
+		name := branch
+		if name == "" {
+			name = filepath.Base(path) // detached HEAD
+		}
+		out = append(out, Worktree{Path: path, Label: filepath.Base(main) + "@" + strings.ReplaceAll(name, "/", "-")})
+	}
+	return out
 }
 
 // loadDiff picks a random commit that touched f and returns up to 3 of its hunks,

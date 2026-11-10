@@ -70,37 +70,64 @@ type SourceFile struct {
 	Size          int64
 }
 
-func scan(roots []string, extraSkip []string) []SourceFile {
-	for _, s := range append(extraSkip, secretDirs...) {
-		skipDirs[s] = true
+type ScanOpts struct {
+	Exclude   []string // extra dir names to skip
+	Worktrees bool     // also scan linked git worktrees of any repo found
+}
+
+func scan(dirs []string, o ScanOpts) []SourceFile {
+	skip := map[string]bool{}
+	for k := range skipDirs {
+		skip[k] = true
+	}
+	for _, s := range append(o.Exclude, secretDirs...) {
+		skip[s] = true
 	}
 	var out []SourceFile
-	for _, root := range roots {
-		root, _ = filepath.Abs(root)
-		label := filepath.Base(root)
+	seen := map[string]bool{}  // files, so a worktree inside a scanned dir isn't shown twice
+	repos := map[string]bool{} // repo dirs spotted on the way, for --include-worktrees
+	walk := func(root, label string) {
 		filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
 			name := d.Name()
+			if name == ".git" && o.Worktrees { // dir in a normal checkout, file in a linked worktree
+				repos[filepath.Dir(p)] = true
+			}
 			if d.IsDir() {
-				if p != root && (strings.HasPrefix(name, ".") || skipDirs[name]) {
+				if p != root && (strings.HasPrefix(name, ".") || skip[name]) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() || strings.HasPrefix(name, ".") || skipFiles[name] || isSecretFile(name) {
+			if !d.Type().IsRegular() || strings.HasPrefix(name, ".") || skipFiles[name] || isSecretFile(name) || seen[p] {
 				return nil
 			}
 			info, err := d.Info()
 			if err != nil || info.Size() == 0 || info.Size() > maxFileSize {
 				return nil
 			}
+			seen[p] = true
 			rel, _ := filepath.Rel(root, p)
 			out = append(out, SourceFile{Abs: p, Rel: filepath.Join(label, rel), Ext: extOf(name),
 				ModTime: info.ModTime().UnixNano(), Size: info.Size()})
 			return nil
 		})
+	}
+	for _, d := range dirs {
+		root, _ := filepath.Abs(d)
+		walk(root, filepath.Base(root))
+		if o.Worktrees {
+			if r := repoRoot(root); r != "" { // dir is somewhere inside a repo
+				repos[r] = true
+			}
+		}
+	}
+	if o.Worktrees {
+		for _, wt := range linkedWorktrees(repos) {
+			walk(wt.Path, wt.Label)
+		}
 	}
 	return out
 }

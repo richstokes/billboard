@@ -10,9 +10,9 @@ import (
 // they changed. Polling (vs fsnotify) keeps it to zero file handles, which matters
 // on macOS where kqueue needs one per file.
 type watcher struct {
-	dirs    []string
-	exclude []string
-	want    map[string]bool
+	dirs []string
+	opts ScanOpts
+	want map[string]bool
 
 	seen map[string]SourceFile // goroutine-only
 
@@ -25,8 +25,8 @@ type watchItem struct {
 	isNew bool
 }
 
-func newWatcher(dirs, exclude []string, want map[string]bool, initial []SourceFile) *watcher {
-	w := &watcher{dirs: dirs, exclude: exclude, want: want, seen: map[string]SourceFile{}}
+func newWatcher(dirs []string, opts ScanOpts, want map[string]bool, initial []SourceFile) *watcher {
+	w := &watcher{dirs: dirs, opts: opts, want: want, seen: map[string]SourceFile{}}
 	for _, f := range initial {
 		w.seen[f.Abs] = f
 	}
@@ -42,7 +42,7 @@ func (w *watcher) run(every time.Duration) {
 func (w *watcher) poll() {
 	var changed []watchItem
 	current := map[string]bool{}
-	for _, f := range scan(w.dirs, w.exclude) {
+	for _, f := range scan(w.dirs, w.opts) {
 		if !w.want[f.Ext] {
 			continue
 		}

@@ -75,6 +75,7 @@ func main() {
 	fs.IntVar(&cfg.FPS, "fps", 30, "frames per second")
 	fs.BoolVar(&cfg.Watch, "watch", false, "start blank and only show files as they're added or modified")
 	exclude := fs.String("exclude", "", "extra comma-separated directory names to skip")
+	worktrees := fs.Bool("include-worktrees", false, "also scan linked git worktrees of any repo under the dirs")
 	seed := fs.Int64("seed", 0, "random seed (0 = random)")
 	fs.Usage = func() {
 		var fl, ef, th strings.Builder
@@ -130,7 +131,8 @@ func main() {
 		}
 	}
 
-	files := scan(dirs, splitList(*exclude))
+	opts := ScanOpts{Exclude: splitList(*exclude), Worktrees: *worktrees}
+	files := scan(dirs, opts)
 	if len(files) == 0 && !(cfg.Watch && *ext != "") {
 		if cfg.Watch {
 			die("no files under %s yet, so nothing to pick from; pass --ext too", strings.Join(dirs, " "))
@@ -174,6 +176,9 @@ func main() {
 		if cfg.Watch {
 			watchFlag = "--watch "
 		}
+		if *worktrees {
+			watchFlag += "--include-worktrees "
+		}
 		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard %s--ext %s %s\n", watchFlag, strings.Join(short, ","), quoteArgs(dirs))
 	}
 
@@ -197,7 +202,7 @@ func main() {
 	}
 	r := &Runner{cfg: cfg, files: chosen, dirs: dirs, rng: rand.New(rand.NewSource(*seed))}
 	if cfg.Watch {
-		r.watch = newWatcher(dirs, splitList(*exclude), want, chosen)
+		r.watch = newWatcher(dirs, opts, want, chosen)
 		go r.watch.run(time.Second)
 	}
 	if msg := r.Run(); msg != "" {

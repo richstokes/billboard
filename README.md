@@ -32,6 +32,10 @@ It's pattern matching, so it won't catch everything. Worth running it over a pro
 
 `billboard -h` lists every flag, effect and theme.
 
+### Worktrees
+
+`--include-worktrees` also scans every linked git worktree of any repo under the dirs, even when the worktree lives outside them (`../proj-feature`) or somewhere hidden like `.claude/worktrees/`. Files from a worktree are labelled `repo@branch/...` in the header. Works with `--watch` too, and new worktrees get picked up within ~15 seconds.
+
 ### Watch mode
 
 ```sh

@@ -20,7 +20,7 @@ func TestWatcherQueue(t *testing.T) {
 	write("notes.txt", "ignored\n")
 
 	want := map[string]bool{".go": true}
-	w := newWatcher([]string{dir}, nil, want, scan([]string{dir}, nil))
+	w := newWatcher([]string{dir}, ScanOpts{}, want, scan([]string{dir}, ScanOpts{}))
 	w.poll()
 	if n := w.pending(); n != 0 {
 		t.Fatalf("nothing changed yet, got %d queued", n)
