@@ -11,8 +11,10 @@ import (
 	"time"
 )
 
-// --repo clones a remote into a cache dir we own, so it's safe to hard-reset it to
-// whatever the remote has. A shallow clone keeps it quick on big repos while still
+// --repo clones a remote into a dir we own, so it's safe to hard-reset it to
+// whatever the remote has. It lives in the system temp dir: reused across restarts
+// during a session, and cleaned up by the OS (on reboot, or after a few days
+// unused on macOS) so old clones don't pile up. A shallow clone keeps it quick on big repos while still
 // leaving enough history for the diff effect.
 const repoDepth = "200"
 
@@ -26,12 +28,9 @@ func normalizeRepoURL(s string) string {
 	return s
 }
 
-// repoCacheDir maps a URL to a stable dir, e.g. ~/Library/Caches/billboard/repos/github.com/owner/name.
+// repoCacheDir maps a URL to a stable dir, e.g. $TMPDIR/billboard/repos/github.com/owner/name.
 func repoCacheDir(url string) (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
+	base := os.TempDir()
 	u := url
 	if i := strings.Index(u, "://"); i >= 0 {
 		u = u[i+3:]
@@ -70,10 +69,15 @@ func gitRun(dir string, interactive bool, timeout time.Duration, args ...string)
 
 // syncRepo makes sure there's an up-to-date clone of url and returns its path.
 // An existing clone that can't be updated (offline, say) is still used.
-func syncRepo(url string) (string, error) {
+//
+// fresh throws away any existing clone first.
+func syncRepo(url string, fresh bool) (string, error) {
 	dir, err := repoCacheDir(url)
 	if err != nil {
 		return "", err
+	}
+	if fresh {
+		os.RemoveAll(dir)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		fmt.Fprintf(os.Stderr, "billboard: updating %s\n", url)

@@ -78,6 +78,7 @@ func main() {
 	exclude := fs.String("exclude", "", "extra comma-separated directory names to skip")
 	worktrees := fs.Bool("include-worktrees", false, "also scan linked git worktrees of any repo under the dirs")
 	repo := fs.String("repo", "", "git URL or GitHub owner/name to clone and show; dirs become paths inside it")
+	fresh := fs.Bool("fresh", false, "with --repo, delete the local clone and clone again from scratch")
 	repoEvery := fs.Duration("repo-interval", 10*time.Second, "with --repo and --watch, how often to pull new commits")
 	seed := fs.Int64("seed", 0, "random seed (0 = random)")
 	fs.Usage = func() {
@@ -133,7 +134,7 @@ func main() {
 	if *repo != "" {
 		url := normalizeRepoURL(*repo)
 		var err error
-		if repoDir, err = syncRepo(url); err != nil {
+		if repoDir, err = syncRepo(url, *fresh); err != nil {
 			die("%v", err)
 		}
 		hintArgs = strings.TrimSpace("--repo " + quoteArgs([]string{*repo}) + " " + hintArgs)

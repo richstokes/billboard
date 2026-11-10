@@ -13,7 +13,7 @@ func TestRepoURLs(t *testing.T) {
 	if got := normalizeRepoURL("git@gitlab.com:a/b.git"); got != "git@gitlab.com:a/b.git" {
 		t.Errorf("scp url should be untouched: got %s", got)
 	}
-	base, _ := os.UserCacheDir()
+	base := os.TempDir()
 	want := filepath.Join(base, "billboard", "repos", "github.com", "owner", "name")
 	for _, u := range []string{
 		"https://github.com/owner/name.git",

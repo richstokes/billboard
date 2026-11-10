@@ -40,7 +40,7 @@ billboard --repo git@gitlab.com:me/thing.git src  # any git URL; dirs are paths 
 billboard --repo me/thing --watch                 # show new commits as they land
 ```
 
-Clones into your cache dir (`~/Library/Caches/billboard/repos/` on macOS) and reuses it next time. It's a shallow clone of the last 200 commits, so big repos stay quick and diff replay still has history. Private repos work with whatever git credentials you already have.
+Clones into the system temp dir (`$TMPDIR/billboard/repos/`) and reuses it if you restart, so there's no wait mid-stream. The OS cleans it up on reboot (macOS also clears it after a few days unused), and `--fresh` forces a clean re-clone. It's a shallow clone of the last 200 commits, so big repos stay quick and diff replay still has history. Private repos work with whatever git credentials you already have.
 
 With `--watch` it pulls every 10 seconds (`--repo-interval` to change it) and plays whatever files the new commits touched. Diff replay shows that new commit for each file.
 
