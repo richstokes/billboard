@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -76,6 +77,8 @@ func main() {
 	fs.BoolVar(&cfg.Watch, "watch", false, "start blank and only show files as they're added or modified")
 	exclude := fs.String("exclude", "", "extra comma-separated directory names to skip")
 	worktrees := fs.Bool("include-worktrees", false, "also scan linked git worktrees of any repo under the dirs")
+	repo := fs.String("repo", "", "git URL or GitHub owner/name to clone and show; dirs become paths inside it")
+	repoEvery := fs.Duration("repo-interval", 10*time.Second, "with --repo and --watch, how often to pull new commits")
 	seed := fs.Int64("seed", 0, "random seed (0 = random)")
 	fs.Usage = func() {
 		var fl, ef, th strings.Builder
@@ -98,7 +101,8 @@ func main() {
 	}
 	fs.Parse(reorderArgs(fs, os.Args[1:]))
 	dirs := fs.Args()
-	if len(dirs) == 0 {
+	hintArgs := quoteArgs(dirs)
+	if len(dirs) == 0 && *repo == "" {
 		dirs = []string{"."}
 	}
 
@@ -124,6 +128,22 @@ func main() {
 	cfg.FPS = max(5, min(cfg.FPS, 120))
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		die("needs to run in a terminal")
+	}
+	repoDir := ""
+	if *repo != "" {
+		url := normalizeRepoURL(*repo)
+		var err error
+		if repoDir, err = syncRepo(url); err != nil {
+			die("%v", err)
+		}
+		hintArgs = strings.TrimSpace("--repo " + quoteArgs([]string{*repo}) + " " + hintArgs)
+		if len(dirs) == 0 {
+			dirs = []string{repoDir}
+		} else {
+			for i, d := range dirs {
+				dirs[i] = filepath.Join(repoDir, d)
+			}
+		}
 	}
 	for _, d := range dirs {
 		if st, err := os.Stat(d); err != nil || !st.IsDir() {
@@ -179,7 +199,7 @@ func main() {
 		if *worktrees {
 			watchFlag += "--include-worktrees "
 		}
-		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard %s--ext %s %s\n", watchFlag, strings.Join(short, ","), quoteArgs(dirs))
+		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard %s--ext %s %s\n", watchFlag, strings.Join(short, ","), hintArgs)
 	}
 
 	want := map[string]bool{}
@@ -200,10 +220,13 @@ func main() {
 	if *seed == 0 {
 		*seed = time.Now().UnixNano()
 	}
-	r := &Runner{cfg: cfg, files: chosen, dirs: dirs, rng: rand.New(rand.NewSource(*seed))}
+	r := &Runner{cfg: cfg, files: chosen, dirs: dirs, repo: *repo, rng: rand.New(rand.NewSource(*seed))}
 	if cfg.Watch {
 		r.watch = newWatcher(dirs, opts, want, chosen)
 		go r.watch.run(time.Second)
+		if repoDir != "" {
+			go pollRepo(repoDir, max(*repoEvery, 2*time.Second))
+		}
 	}
 	if msg := r.Run(); msg != "" {
 		restore()
@@ -274,6 +297,7 @@ type Runner struct {
 	cfg   *Config
 	files []SourceFile
 	dirs  []string
+	repo  string   // --repo as given, for the idle screen
 	watch *watcher // nil unless --watch
 
 	curFile SourceFile
@@ -586,7 +610,11 @@ func (r *Runner) drawIdle(th *Theme) {
 		msg = "watching for changes"
 	}
 	dots := strings.Repeat(".", int(t*2)%4)
-	sub := "waiting for a file to be saved" + dots + strings.Repeat(" ", 3-len(dots))
+	wait := "waiting for a file to be saved"
+	if r.repo != "" {
+		msg, wait = "watching "+r.repo, "waiting for new commits"
+	}
+	sub := wait + dots + strings.Repeat(" ", 3-len(dots))
 	y := s.H/2 - 1
 	pulse := 0.55 + 0.25*math.Sin(t*2)
 	s.Text((s.W-len([]rune(msg)))/2, y, msg, lerp(th.BG, th.Header, pulse), false)

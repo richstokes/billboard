@@ -144,7 +144,10 @@ func parseWorktrees(porcelain string) []Worktree {
 
 // loadDiff picks a random commit that touched f and returns up to 3 of its hunks,
 // each trimmed to maxRows.
-func loadDiff(f SourceFile, maxRows int, rng *rand.Rand) (*CommitDiff, bool) {
+//
+// preferLatest tries the newest commit first; with --watch the file just changed,
+// so that's the commit worth showing.
+func loadDiff(f SourceFile, maxRows int, rng *rand.Rand, preferLatest bool) (*CommitDiff, bool) {
 	root := repoRoot(filepath.Dir(f.Abs))
 	if root == "" {
 		return nil, false
@@ -159,6 +162,7 @@ func loadDiff(f SourceFile, maxRows int, rng *rand.Rand) (*CommitDiff, bool) {
 		return nil, false
 	}
 	commits := strings.Split(strings.TrimSpace(log), "\n")
+	newest := commits[0]
 	// the oldest commit is usually the file being created, which is just one long
 	// add; only fall back to it when there's nothing else
 	first := commits[len(commits)-1]
@@ -167,6 +171,9 @@ func loadDiff(f SourceFile, maxRows int, rng *rand.Rand) (*CommitDiff, bool) {
 	}
 	rng.Shuffle(len(commits), func(i, j int) { commits[i], commits[j] = commits[j], commits[i] })
 	commits = append(commits[:min(4, len(commits))], first)
+	if preferLatest {
+		commits = append([]string{newest}, commits...)
+	}
 	for _, c := range commits {
 		p := strings.Split(c, "\x1f")
 		if len(p) != 3 {

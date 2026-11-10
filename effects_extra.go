@@ -551,7 +551,7 @@ var (
 )
 
 func buildDiff(f SourceFile, l Layout, c *Config, rng *rand.Rand) (Effect, *Doc, bool) {
-	cd, ok := loadDiff(f, l.H-1, rng)
+	cd, ok := loadDiff(f, l.H-1, rng, c.Watch)
 	if !ok {
 		return nil, nil, false
 	}

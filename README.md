@@ -32,6 +32,18 @@ It's pattern matching, so it won't catch everything. Worth running it over a pro
 
 `billboard -h` lists every flag, effect and theme.
 
+### Remote repos
+
+```sh
+billboard --repo richstokes/billboard            # GitHub shorthand
+billboard --repo git@gitlab.com:me/thing.git src  # any git URL; dirs are paths inside the repo
+billboard --repo me/thing --watch                 # show new commits as they land
+```
+
+Clones into your cache dir (`~/Library/Caches/billboard/repos/` on macOS) and reuses it next time. It's a shallow clone of the last 200 commits, so big repos stay quick and diff replay still has history. Private repos work with whatever git credentials you already have.
+
+With `--watch` it pulls every 10 seconds (`--repo-interval` to change it) and plays whatever files the new commits touched. Diff replay shows that new commit for each file.
+
 ### Worktrees
 
 `--include-worktrees` also scans every linked git worktree of any repo under the dirs, even when the worktree lives outside them (`../proj-feature`) or somewhere hidden like `.claude/worktrees/`. Files from a worktree are labelled `repo@branch/...` in the header. Works with `--watch` too, and new worktrees get picked up within ~15 seconds.
