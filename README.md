@@ -2,6 +2,12 @@
 
 Streams source code from your projects in a terminal, with a few different effects and themes. Built to sit in the background of an OBS scene or video.
 
+![typewriter effect, dracula theme](screenshots/typewriter.png)
+
+| `--effect matrix --theme matrix` | `--effect hack --theme synthwave` |
+| --- | --- |
+| ![matrix effect](screenshots/matrix.png) | ![hack effect](screenshots/hack.png) |
+
 ## Install
 
 ```sh
