@@ -48,3 +48,37 @@ func TestWatcherQueue(t *testing.T) {
 		t.Error("queue should be empty")
 	}
 }
+
+// A save that briefly empties the file (truncate, then write) shouldn't make it
+// look like a brand new file, but one that's been gone a while should.
+func TestWatcherSaveIsNotNew(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.go")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package a\n")
+	want := map[string]bool{".go": true}
+	w := newWatcher([]string{dir}, ScanOpts{}, want, scan([]string{dir}, ScanOpts{}))
+
+	write("") // caught mid-save: empty files aren't scanned
+	w.poll()
+	write("package a\n\nfunc A() {}\n")
+	w.poll()
+	if it, ok := w.pop(); !ok || it.isNew {
+		t.Fatalf("want a.go queued as modified, got ok=%v new=%v", ok, it.isNew)
+	}
+
+	os.Remove(p)
+	for i := 0; i < goneAfter; i++ {
+		w.poll()
+	}
+	write("package a\n")
+	w.poll()
+	if it, ok := w.pop(); !ok || !it.isNew {
+		t.Fatalf("want re-created a.go queued as new, got ok=%v new=%v", ok, it.isNew)
+	}
+}

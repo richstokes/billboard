@@ -556,8 +556,8 @@ func buildDiff(f SourceFile, l Layout, c *Config, rng *rand.Rand) (Effect, *Doc,
 		return nil, nil, false
 	}
 	subj := cd.Subject
-	if len(subj) > 60 {
-		subj = subj[:57] + "..."
+	if sr := []rune(subj); len(sr) > 60 {
+		subj = string(sr[:57]) + "..."
 	}
 	d := &Doc{Path: f.Rel, Info: fmt.Sprintf("%s  %s  (%s)", cd.Hash, subj, cd.When)}
 	e := &diffFx{cd: cd, l: l, rng: rng, delay: 1 / (c.CPS * 1.4)}

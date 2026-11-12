@@ -10,6 +10,7 @@ func TestIsSecretFile(t *testing.T) {
 		"prod.env", "app.env.local", "server.pem", "tls.key", "cert.p12", "id_rsa", "id_ed25519.pub",
 		"terraform.tfstate", "terraform.tfstate.backup", "prod.tfvars", "secrets.yaml",
 		"service-account.json", "credentials", "client_secret.json", "db-password.txt", "vault.kdbx",
+		"prod.tfvars.json", "PROD.ENV", "Server.PEM",
 	}
 	fine := []string{
 		"main.go", "env.go", "environment.ts", "envelope.py", "secrets.go", "token_test.go",
@@ -38,6 +39,11 @@ func TestHasSecret(t *testing.T) {
 		`DATABASE_URL = "postgres://admin:` + r(12) + `@db.internal:5432/app"`,
 		`password: "` + r(16) + `"`,
 		`apiKey = "` + r(24) + `"`,
+		"SLACK=xoxe-" + r(20),
+		"https://discord.com/api/webhooks/123/abc",
+		"jwt = eyJ" + r(20) + ".eyJ" + r(30) + "." + r(20),
+		"hf_" + r(34),
+		"DefaultEndpointsProtocol=https;AccountName=x;AccountKey=" + r(60) + "==",
 	}
 	fine := []string{
 		"func main() {\n\tfmt.Println(\"hi\")\n}",
@@ -46,6 +52,7 @@ func TestHasSecret(t *testing.T) {
 		`password: "changeme"`,
 		`url := "https://example.com/path"`,
 		`// read the token from the keychain`,
+		`msg.eyJustWorks.eyJoke.x`,
 	}
 	for _, s := range secret {
 		if !hasSecret(s) {

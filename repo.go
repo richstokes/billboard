@@ -59,6 +59,7 @@ func gitRun(dir string, interactive bool, timeout time.Duration, args ...string)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = time.Second
 	if interactive {
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stderr, os.Stderr
 	} else {
@@ -87,14 +88,22 @@ func syncRepo(url string, fresh bool) (string, error) {
 		return dir, nil
 	}
 	fmt.Fprintf(os.Stderr, "billboard: cloning %s\n", url)
-	os.MkdirAll(filepath.Dir(dir), 0o755)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return "", err
+	}
 	tmp := dir + ".partial"
 	os.RemoveAll(tmp)
-	if err := gitRun("", true, 30*time.Minute, "clone", "--depth", repoDepth, "--no-tags", url, tmp); err != nil {
+	// "--" so a URL starting with a dash can't be read as a git option
+	if err := gitRun("", true, 30*time.Minute, "clone", "--depth", repoDepth, "--no-tags", "--", url, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return "", fmt.Errorf("clone failed: %v", err)
 	}
-	return dir, os.Rename(tmp, dir)
+	os.RemoveAll(dir) // leftovers with no .git (a parent of another clone, say) would block the rename
+	if err := os.Rename(tmp, dir); err != nil {
+		os.RemoveAll(tmp)
+		return "", err
+	}
+	return dir, nil
 }
 
 // pullRepo fetches the checked-out branch and hard-resets to it. git only rewrites
@@ -105,6 +114,9 @@ func pullRepo(dir string, interactive bool) error {
 		return err
 	}
 	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("unexpected branch %q", branch)
+	}
 	if err := gitRun(dir, interactive, 5*time.Minute, "fetch", "-q", "--depth", repoDepth, "--no-tags", "origin", branch); err != nil {
 		return err
 	}

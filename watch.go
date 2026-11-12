@@ -15,6 +15,7 @@ type watcher struct {
 	want map[string]bool
 
 	seen map[string]SourceFile // goroutine-only
+	gone map[string]int        // polls each seen file has been missing for; goroutine-only
 
 	mu    sync.Mutex
 	queue []watchItem
@@ -26,12 +27,14 @@ type watchItem struct {
 }
 
 func newWatcher(dirs []string, opts ScanOpts, want map[string]bool, initial []SourceFile) *watcher {
-	w := &watcher{dirs: dirs, opts: opts, want: want, seen: map[string]SourceFile{}}
+	w := &watcher{dirs: dirs, opts: opts, want: want, seen: map[string]SourceFile{}, gone: map[string]int{}}
 	for _, f := range initial {
 		w.seen[f.Abs] = f
 	}
 	return w
 }
+
+const goneAfter = 3
 
 func (w *watcher) run(every time.Duration) {
 	for range time.Tick(every) {
@@ -53,9 +56,15 @@ func (w *watcher) poll() {
 		}
 		w.seen[f.Abs] = f
 	}
-	for p := range w.seen { // forget deleted files so re-creating one counts as new
-		if !current[p] {
+	// Forget deleted files so re-creating one counts as new. Give it a couple of
+	// polls first though: a save can leave the file missing or empty for a moment
+	// (truncate then write, or delete then rename), and that's not a new file.
+	for p := range w.seen {
+		if current[p] {
+			delete(w.gone, p)
+		} else if w.gone[p]++; w.gone[p] >= goneAfter {
 			delete(w.seen, p)
+			delete(w.gone, p)
 		}
 	}
 	sort.Slice(changed, func(i, j int) bool { return changed[i].f.ModTime < changed[j].f.ModTime })

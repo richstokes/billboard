@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -108,21 +110,40 @@ func main() {
 	}
 
 	die := func(f string, a ...any) { fmt.Fprintf(os.Stderr, "billboard: "+f+"\n", a...); os.Exit(1) }
-	if _, cfg.Theme = themeByName(*theme); cfg.Theme < 0 {
+	if _, cfg.Theme = themeByName(strings.ToLower(*theme)); cfg.Theme < 0 {
 		die("unknown theme %q (run with -h to list them)", *theme)
 	}
-	if *effect == "all" {
-		for i := range effects {
-			cfg.Effects = append(cfg.Effects, i)
-		}
-	} else {
-		for _, n := range splitList(*effect) {
-			i := effectByName(n)
-			if i < 0 {
-				die("unknown effect %q (run with -h to list them)", n)
+	for _, n := range splitList(strings.ToLower(*effect)) {
+		if n == "all" {
+			cfg.Effects = cfg.Effects[:0]
+			for i := range effects {
+				cfg.Effects = append(cfg.Effects, i)
 			}
-			cfg.Effects = append(cfg.Effects, i)
+			break
 		}
+		i := effectByName(n)
+		if i < 0 {
+			die("unknown effect %q (run with -h to list them)", n)
+		}
+		cfg.Effects = append(cfg.Effects, i)
+	}
+	if len(cfg.Effects) == 0 {
+		die("--effect needs at least one effect (run with -h to list them)")
+	}
+	// zero, negative or NaN rates freeze the effects or spin them forever
+	for _, f := range []struct {
+		name string
+		v    float64
+	}{{"speed", cfg.Speed}, {"cps", cfg.CPS}, {"lps", cfg.LPS}} {
+		if !(f.v > 0) || math.IsInf(f.v, 0) {
+			die("--%s must be greater than 0", f.name)
+		}
+	}
+	if !(cfg.Hold >= 0) {
+		die("--hold can't be negative")
+	}
+	if math.IsNaN(cfg.Brightness) {
+		die("--brightness must be between 0 and 1")
 	}
 	cfg.Brightness = clamp01(cfg.Brightness)
 	cfg.MaxLines = max(cfg.MaxLines, 5)
@@ -143,6 +164,9 @@ func main() {
 		} else {
 			for i, d := range dirs {
 				dirs[i] = filepath.Join(repoDir, d)
+				if rel, err := filepath.Rel(repoDir, dirs[i]); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					die("%s is outside the repo", d)
+				}
 			}
 		}
 	}
@@ -161,28 +185,40 @@ func main() {
 		die("no files found under %s", strings.Join(dirs, " "))
 	}
 
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGHUP)
 	old, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		die("%v", err)
 	}
 	enterScreen()
-	restored := false
+	var once sync.Once
 	restore := func() {
-		if !restored {
-			restored = true
+		once.Do(func() {
 			leaveScreen()
 			term.Restore(int(os.Stdin.Fd()), old)
-		}
+		})
 	}
 	defer restore()
+	// The run loop handles signals itself. Until it starts (the picker blocks on
+	// stdin), make sure being killed still puts the terminal back.
+	running := make(chan struct{})
+	go func() {
+		select {
+		case <-quit:
+			restore()
+			os.Exit(1)
+		case <-running:
+		}
+	}()
 
 	hint := ""
+	want := map[string]bool{}
 	if *ext != "" {
 		for _, e := range splitList(*ext) {
-			if !strings.HasPrefix(e, ".") && strings.ToLower(e) == e {
-				e = "." + e // "go" -> ".go"; "Makefile" stays as a bare filename
-			}
 			cfg.Exts = append(cfg.Exts, e)
+			want[e] = true // a bare filename as typed: Makefile, justfile
+			want["."+strings.ToLower(strings.TrimPrefix(e, "."))] = true
 		}
 	} else {
 		cfg.Exts = pick(countExts(files), themes[cfg.Theme])
@@ -191,6 +227,7 @@ func main() {
 		}
 		var short []string
 		for _, e := range cfg.Exts {
+			want[e] = true
 			short = append(short, strings.TrimPrefix(e, "."))
 		}
 		watchFlag := ""
@@ -200,13 +237,9 @@ func main() {
 		if *worktrees {
 			watchFlag += "--include-worktrees "
 		}
-		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard %s--ext %s %s\n", watchFlag, strings.Join(short, ","), hintArgs)
+		hint = fmt.Sprintf("Next time, skip the picker with:\n  billboard %s--ext %s %s\n", watchFlag, quoteArgs([]string{strings.Join(short, ",")}), hintArgs)
 	}
 
-	want := map[string]bool{}
-	for _, e := range cfg.Exts {
-		want[e] = true
-	}
 	var chosen []SourceFile
 	for _, f := range files {
 		if want[f.Ext] {
@@ -221,7 +254,7 @@ func main() {
 	if *seed == 0 {
 		*seed = time.Now().UnixNano()
 	}
-	r := &Runner{cfg: cfg, files: chosen, dirs: dirs, repo: *repo, rng: rand.New(rand.NewSource(*seed))}
+	r := &Runner{cfg: cfg, files: chosen, dirs: dirs, repo: *repo, quit: quit, rng: rand.New(rand.NewSource(*seed))}
 	if cfg.Watch {
 		r.watch = newWatcher(dirs, opts, want, chosen)
 		go r.watch.run(time.Second)
@@ -229,6 +262,7 @@ func main() {
 			go pollRepo(repoDir, max(*repoEvery, 2*time.Second))
 		}
 	}
+	close(running)
 	if msg := r.Run(); msg != "" {
 		restore()
 		die("%s", msg)
@@ -253,12 +287,38 @@ func splitList(s string) []string {
 func quoteArgs(a []string) string {
 	var out []string
 	for _, s := range a {
-		if strings.ContainsAny(s, " '\"$") {
+		if s == "" || strings.IndexFunc(s, shellUnsafe) >= 0 {
 			s = "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 		}
 		out = append(out, s)
 	}
 	return strings.Join(out, " ")
+}
+
+func shellUnsafe(r rune) bool {
+	return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./,:@%+=", r))
+}
+
+// splitKeys breaks one read from the terminal into keys. Key repeat or a busy
+// frame can deliver several at once ("++", or an arrow followed by a letter).
+func splitKeys(b []byte) []string {
+	var out []string
+	for len(b) > 0 {
+		n := 1
+		switch {
+		case b[0] == 0x1b && len(b) > 1 && (b[1] == '[' || b[1] == 'O'): // CSI / SS3: runs to a final byte
+			for n = 2; n < len(b) && (b[n] < 0x40 || b[n] > 0x7e); n++ {
+			}
+			n = min(n+1, len(b))
+		case b[0] == 0x1b && len(b) > 1: // alt+key; kept whole so it isn't read as esc
+			n = 2
+		default:
+			_, n = utf8.DecodeRune(b)
+		}
+		out = append(out, string(b[:n]))
+		b = b[n:]
+	}
+	return out
 }
 
 // reorderArgs lets flags come after positional args (billboard ~/code --ext go).
@@ -298,7 +358,8 @@ type Runner struct {
 	cfg   *Config
 	files []SourceFile
 	dirs  []string
-	repo  string   // --repo as given, for the idle screen
+	repo  string // --repo as given, for the idle screen
+	quit  <-chan os.Signal
 	watch *watcher // nil unless --watch
 
 	curFile SourceFile
@@ -464,8 +525,6 @@ func (r *Runner) Run() string {
 	}()
 	winch := make(chan os.Signal, 1)
 	signal.Notify(winch, syscall.SIGWINCH)
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGTERM, syscall.SIGHUP)
 
 	if r.watch == nil && !r.nextFile() {
 		return "couldn't read any of the matching files"
@@ -476,8 +535,13 @@ func (r *Runner) Run() string {
 	for {
 		select {
 		case k, ok := <-keys:
-			if !ok || r.handleKey(k) {
+			if !ok {
 				return ""
+			}
+			for _, key := range splitKeys(k) {
+				if r.handleKey(key) {
+					return ""
+				}
 			}
 			continue
 		case <-winch:
@@ -485,10 +549,11 @@ func (r *Runner) Run() string {
 			r.s.Resize(w, h)
 			r.replay()
 			continue
-		case <-quit:
+		case <-r.quit:
 			return ""
 		case now := <-tick.C:
-			dt := now.Sub(last).Seconds()
+			// capped so a stall (slow git call, laptop sleep) doesn't fast-forward the effect
+			dt := min(now.Sub(last).Seconds(), 0.25)
 			last = now
 			if r.cur == nil && r.watch != nil {
 				r.nextFile() // idle: pick up the first change as soon as it lands
@@ -523,12 +588,12 @@ func (r *Runner) advance(dt float64) {
 	}
 }
 
-func (r *Runner) handleKey(k []byte) (quit bool) {
+func (r *Runner) handleKey(s string) (quit bool) {
 	cfg := r.cfg
-	switch s := string(k); {
+	switch {
 	case s == "q" || s == "Q" || s == "\x03" || s == "\x1b":
 		return true
-	case s == "n" || s == "\x1b[C":
+	case s == "n" || s == "\x1b[C" || s == "\x1bOC":
 		if r.watch != nil && r.watch.pending() == 0 {
 			r.flash("no changes queued")
 		} else {
@@ -634,8 +699,8 @@ func (r *Runner) drawFile(th *Theme) {
 			}
 		}
 		path := r.doc.Path
-		if max := s.W - 6; len(path) > max && max > 3 {
-			path = "…" + path[len(path)-max+1:]
+		if pr, room := []rune(path), s.W-6; len(pr) > room && room > 3 {
+			path = "…" + string(pr[len(pr)-room+1:])
 		}
 		s.Text(lay.X-lay.Gutter, 1, path, th.Header, false)
 		if info := r.doc.Info; info != "" {
@@ -716,33 +781,35 @@ func pick(exts []ExtCount, th *Theme) []string {
 		if err != nil {
 			return nil
 		}
-		switch k := string(buf[:n]); k {
-		case "q", "\x03", "\x1b":
-			return nil
-		case "\x1b[A", "k":
-			cur = max(0, cur-1)
-		case "\x1b[B", "j":
-			cur = min(len(exts)-1, cur+1)
-		case " ", "\t":
-			sel[cur] = !sel[cur]
-			cur = min(len(exts)-1, cur+1)
-		case "a":
-			for i := range sel {
-				sel[i] = true
-			}
-		case "x":
-			for i := range sel {
-				sel[i] = false
-			}
-		case "\r", "\n":
-			var outExts []string
-			for i, s := range sel {
-				if s {
-					outExts = append(outExts, exts[i].Ext)
+		for _, k := range splitKeys(buf[:n]) {
+			switch k {
+			case "q", "\x03", "\x1b":
+				return nil
+			case "\x1b[A", "\x1bOA", "k":
+				cur = max(0, cur-1)
+			case "\x1b[B", "\x1bOB", "j":
+				cur = min(len(exts)-1, cur+1)
+			case " ", "\t":
+				sel[cur] = !sel[cur]
+				cur = min(len(exts)-1, cur+1)
+			case "a":
+				for i := range sel {
+					sel[i] = true
 				}
-			}
-			if len(outExts) > 0 {
-				return outExts
+			case "x":
+				for i := range sel {
+					sel[i] = false
+				}
+			case "\r", "\n":
+				var outExts []string
+				for i, s := range sel {
+					if s {
+						outExts = append(outExts, exts[i].Ext)
+					}
+				}
+				if len(outExts) > 0 {
+					return outExts
+				}
 			}
 		}
 	}

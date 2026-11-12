@@ -52,10 +52,11 @@ const maxFileSize = 512 * 1024
 
 func extOf(path string) string {
 	base := filepath.Base(path)
-	if strings.HasSuffix(base, ".min.js") {
+	lower := strings.ToLower(base)
+	if strings.HasSuffix(lower, ".min.js") {
 		return ".min.js"
 	}
-	if strings.HasSuffix(base, ".d.ts") {
+	if strings.HasSuffix(lower, ".d.ts") {
 		return ".d.ts"
 	}
 	if e := filepath.Ext(base); e != "" && e != base {
@@ -80,7 +81,7 @@ func scan(dirs []string, o ScanOpts) []SourceFile {
 	for k := range skipDirs {
 		skip[k] = true
 	}
-	for _, s := range append(o.Exclude, secretDirs...) {
+	for _, s := range o.Exclude {
 		skip[s] = true
 	}
 	var out []SourceFile
@@ -96,7 +97,7 @@ func scan(dirs []string, o ScanOpts) []SourceFile {
 				repos[filepath.Dir(p)] = true
 			}
 			if d.IsDir() {
-				if p != root && (strings.HasPrefix(name, ".") || skip[name]) {
+				if p != root && (strings.HasPrefix(name, ".") || skip[name] || isSecretDir(name)) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -117,7 +118,13 @@ func scan(dirs []string, o ScanOpts) []SourceFile {
 	}
 	for _, d := range dirs {
 		root, _ := filepath.Abs(d)
-		walk(root, filepath.Base(root))
+		label := filepath.Base(root)
+		// git reports worktree paths with symlinks resolved, so walk the real path
+		// too or a worktree under a symlinked dir gets listed twice
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			root = real
+		}
+		walk(root, label)
 		if o.Worktrees {
 			if r := repoRoot(root); r != "" { // dir is somewhere inside a repo
 				repos[r] = true
@@ -198,7 +205,7 @@ func load(f SourceFile) []Line {
 
 // highlight tokenises src, picking the lexer from the file name.
 func highlight(name, src string) []Line {
-	src = strings.ReplaceAll(src, "\r\n", "\n")
+	src = strings.ReplaceAll(strings.TrimPrefix(src, "\ufeff"), "\r\n", "\n")
 	lexer := lexers.Match(name)
 	if lexer == nil {
 		lexer = lexers.Analyse(src)

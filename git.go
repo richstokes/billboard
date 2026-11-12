@@ -27,9 +27,15 @@ type CommitDiff struct {
 // Both caches are hit from the --watch goroutine as well as the main loop.
 var (
 	gitMu     sync.Mutex
-	repoRoots = map[string]string{} // dir -> repo root, "" if not in a repo
+	repoRoots = map[string]repoLoc{} // dir -> where it sits in a repo
 	wtCache   = map[string]wtEntry{}
 )
+
+// repoLoc is a dir's repo root ("" if it isn't in one) and the dir's path inside
+// that repo, slash-separated with a trailing slash ("" at the root).
+type repoLoc struct {
+	root, prefix string
+}
 
 type wtEntry struct {
 	at  time.Time
@@ -44,26 +50,37 @@ func git(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "-c", "core.quotepath=off"}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.WaitDelay = time.Second // don't hang on a child that outlives the timeout
 	out, err := cmd.Output()
 	return string(out), err
 }
 
-func repoRoot(dir string) string {
+func repoRoot(dir string) string { return repoLocOf(dir).root }
+
+// repoLocOf asks git where dir is rather than working it out from the paths. git
+// reports the root with symlinks resolved (/private/var/... for $TMPDIR on macOS),
+// so filepath.Rel against the path we scanned can come out as nonsense.
+func repoLocOf(dir string) repoLoc {
 	gitMu.Lock()
 	r, ok := repoRoots[dir]
 	gitMu.Unlock()
 	if ok {
 		return r
 	}
-	out, err := git(dir, "rev-parse", "--show-toplevel")
-	root := ""
-	if err == nil {
-		root = strings.TrimSpace(out)
+	var loc repoLoc
+	if out, err := git(dir, "rev-parse", "--show-toplevel", "--show-prefix"); err == nil {
+		if p := strings.SplitN(strings.TrimRight(out, "\r\n"), "\n", 2); p[0] != "" {
+			loc.root = strings.TrimRight(p[0], "\r")
+			if len(p) == 2 {
+				loc.prefix = strings.TrimSpace(p[1])
+			}
+		}
 	}
 	gitMu.Lock()
-	repoRoots[dir] = root
+	repoRoots[dir] = loc
 	gitMu.Unlock()
-	return root
+	return loc
 }
 
 // linkedWorktrees returns every linked worktree of the given repos (not the main
@@ -148,15 +165,11 @@ func parseWorktrees(porcelain string) []Worktree {
 // preferLatest tries the newest commit first; with --watch the file just changed,
 // so that's the commit worth showing.
 func loadDiff(f SourceFile, maxRows int, rng *rand.Rand, preferLatest bool) (*CommitDiff, bool) {
-	root := repoRoot(filepath.Dir(f.Abs))
-	if root == "" {
+	loc := repoLocOf(filepath.Dir(f.Abs))
+	if loc.root == "" {
 		return nil, false
 	}
-	rel, err := filepath.Rel(root, f.Abs)
-	if err != nil {
-		return nil, false
-	}
-	rel = filepath.ToSlash(rel)
+	root, rel := loc.root, loc.prefix+filepath.Base(f.Abs)
 	log, err := git(root, "log", "--no-merges", "-n", "40", "--format=%h%x1f%s%x1f%ar", "--", rel)
 	if err != nil {
 		return nil, false
@@ -174,11 +187,13 @@ func loadDiff(f SourceFile, maxRows int, rng *rand.Rand, preferLatest bool) (*Co
 	if preferLatest {
 		commits = append([]string{newest}, commits...)
 	}
+	tried := map[string]bool{}
 	for _, c := range commits {
 		p := strings.Split(c, "\x1f")
-		if len(p) != 3 {
+		if len(p) != 3 || tried[p[0]] {
 			continue
 		}
+		tried[p[0]] = true
 		cd := &CommitDiff{Hash: p[0], Subject: p[1], When: p[2]}
 		newSrc, err := git(root, "show", cd.Hash+":"+rel)
 		if err != nil {
@@ -214,12 +229,13 @@ func parseHunks(diff string, oldL, newL []Line, maxRows int) [][]DiffRow {
 	var cur []DiffRow
 	o, n := 0, 0
 	flush := func() {
+		cur = cur[:min(len(cur), max(maxRows, 0))]
 		changed := false
-		for _, r := range cur {
+		for _, r := range cur { // only worth showing if a change survived the trim
 			changed = changed || r.Kind != ' '
 		}
 		if changed {
-			hunks = append(hunks, cur[:min(len(cur), maxRows)])
+			hunks = append(hunks, cur)
 		}
 		cur = nil
 	}
